@@ -29,7 +29,7 @@ router.get('/', async (req, res) => {
         }
         // If department filter exits, match department name
         if (department) {
-            const depPattern = `%${String(department).replace(/[%_]/g, '\\$&')}%`;
+            const depPattern = `%${String(department).replace(/[\\%_]/g, '\\$&')}%`;
             filterConditions.push(ilike(departments.name, depPattern));
             
         }
