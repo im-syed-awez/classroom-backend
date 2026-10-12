@@ -15,6 +15,13 @@
       "when": 1791272824485,
       "tag": "0001_familiar_the_hunter",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791807926114,
+      "tag": "0002_slippery_hitman",
+      "breakpoints": true
     }
   ]
 }
