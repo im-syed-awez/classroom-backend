@@ -1,4 +1,4 @@
-import { and, desc, eq, getTableColumns, ilike, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, ilike, or, sql } from "drizzle-orm";
 import  express  from "express";
 import { departments, subjects } from "../db/schema/app.js";
 import { db } from "../db/index.js";
@@ -8,12 +8,26 @@ const router = express.Router();
 //Get all subjects with optional search, filtering and pagination
 router.get('/', async (req, res) => {
     try {
-        const { search, department, page = 1, limit = 10 } =req.query;
+        const { search, department, page = 1, limit = 10, sortBy, sortOrder } =req.query;
 
         const currentPage = Math.max(1, parseInt(String(page), 10) || 1);
         const LimitPerPage = Math.min(Math.max(1, parseInt(String(limit), 10) || 10), 100); // Max 100 records per page
 
         const offset = (currentPage -1) * LimitPerPage;
+
+        const sortableColumns = {
+            id: subjects.id,
+            name: subjects.name,
+            code: subjects.code,
+            createdAt: subjects.createdAt,
+            updatedAt: subjects.updatedAt,
+        };
+        const sortColumn = typeof sortBy === 'string' && Object.prototype.hasOwnProperty.call(sortableColumns, sortBy)
+            ? sortableColumns[sortBy as keyof typeof sortableColumns]
+            : undefined;
+        const orderBy = sortColumn
+            ? sortOrder === 'asc' ? asc(sortColumn) : desc(sortColumn)
+            : desc(subjects.createdAt);
 
         const filterConditions = [];
 
@@ -50,7 +64,7 @@ router.get('/', async (req, res) => {
             department: { ...getTableColumns(departments) } 
         }).from(subjects).leftJoin(departments, eq(subjects.departmentId, departments.id))
         .where(whereClause)
-        .orderBy(desc(subjects.createdAt))
+        .orderBy(orderBy, asc(subjects.id))
         .limit(LimitPerPage)
         .offset(offset);
 
