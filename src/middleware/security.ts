@@ -43,6 +43,7 @@ const securityMiddleware = async (req: Request, res: Response, next: NextFunctio
         const decision = await client.protect(arcjetRequest);
 
         if(decision.isDenied() && decision.reason.isBot()) {
+            
             // A 403 tells clients that the request is forbidden and should not be retried.
             return res.status(403).json({ error: 'Forbidden', message: 'Automated requests are not allowed.' });
         }
@@ -50,6 +51,7 @@ const securityMiddleware = async (req: Request, res: Response, next: NextFunctio
             return res.status(403).json({ error: 'Forbidden', message: 'Request blocked by security policy.' });
         }
         if(decision.isDenied() && decision.reason.isRateLimit()) {
+
             //Clients and proxies treat 429 as the retryable rate-limit status.
             return res.status(429).json({ error: 'Too many requests.', message });
         }
