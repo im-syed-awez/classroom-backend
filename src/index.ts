@@ -3,6 +3,8 @@ import cors from "cors";
 
 import subjectsRouter from "./routes/subjects.js";
 import securityMiddleware from "./middleware/security.js";
+import { toNodeHandler } from "better-auth/node";
+import { auth } from "./lib/auth.js";
 
 const app = express();
 const PORT = 8000;
@@ -16,9 +18,14 @@ app.use(cors({
 	credentials: true
 }));
 
+app.all('/api/auth/*splat', toNodeHandler(auth));
+// With the path config, Any request matching that path will be handled by better auth for us. It'll authenticate users on our behalf. 
+
+// We don't have to write any JWTs or handle sessions, Better Auth will do it.
+
 app.use(express.json());
+
 app.use(securityMiddleware);
-//Place the security middleware under it.
 
 app.use('/api/subjects', subjectsRouter)
 
