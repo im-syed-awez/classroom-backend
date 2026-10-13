@@ -29,7 +29,7 @@ const securityMiddleware = async (req: Request, res: Response, next: NextFunctio
             slidingWindow({
                 mode: 'LIVE',
                 interval: '1m',
-                max: limit
+                max: limit,
             })
         )
 
