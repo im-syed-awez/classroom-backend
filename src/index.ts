@@ -1,10 +1,12 @@
-import express from "express";
-import cors from "cors";
+import AgentAPI from "apminsight";
+AgentAPI.config();
 
-import subjectsRouter from "./routes/subjects.js";
-import securityMiddleware from "./middleware/security.js";
-import { toNodeHandler } from "better-auth/node";
-import { auth } from "./lib/auth.js";
+const { default: express } = await import("express");
+const { default: cors } = await import("cors");
+const { default: subjectsRouter } = await import("./routes/subjects.js");
+const { default: securityMiddleware } = await import("./middleware/security.js");
+const { toNodeHandler } = await import("better-auth/node");
+const { auth } = await import("./lib/auth.js");
 
 const app = express();
 const PORT = 8000;
