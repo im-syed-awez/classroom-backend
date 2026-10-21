@@ -4,8 +4,11 @@ import { and, desc, eq, getTableColumns, ilike, or, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { classes, departments, subjects } from "../db/schema/app.js";
 import { user } from "../db/schema/auth.js";
+import { requireAuth, requireRole } from "../middleware/auth.js";
 
 const router = express.Router();
+
+router.use(requireAuth);
 
 // Get all classes with optional search, filtering and pagination
 router.get("/", async (req, res) => {
@@ -44,6 +47,12 @@ router.get("/", async (req, res) => {
       filterConditions.push(ilike(user.name, teacherPattern));
     }
 
+    if (req.user?.role === "teacher") {
+      filterConditions.push(eq(classes.teacherId, req.user.id));
+    } else if (req.user?.role === "student") {
+      filterConditions.push(eq(classes.status, "active"));
+    }
+
     // Combine all filters using AND if any exist
     const whereClause =
       filterConditions.length > 0 ? and(...filterConditions) : undefined;
@@ -57,9 +66,14 @@ router.get("/", async (req, res) => {
 
     const totalCount = countResult[0]?.count ?? 0;
 
+    const { inviteCode: _inviteCode, ...classColumns } = getTableColumns(classes);
+    const inviteCodeColumn =
+      req.user?.role === "student" ? {} : { inviteCode: classes.inviteCode };
+
     const classesList = await db
       .select({
-        ...getTableColumns(classes),
+        ...classColumns,
+        ...inviteCodeColumn,
         subject: { ...getTableColumns(subjects) },
         teacher: { ...getTableColumns(user) },
       })
@@ -93,9 +107,14 @@ router.get("/:id", async (req, res) => {
   if (!Number.isFinite(classId))
     return res.status(400).json({ error: "No Class found." });
 
+  const { inviteCode: _inviteCode, ...classColumns } = getTableColumns(classes);
+  const inviteCodeColumn =
+    req.user?.role === "student" ? {} : { inviteCode: classes.inviteCode };
+
   const [classDetails] = await db
     .select({
-      ...getTableColumns(classes),
+      ...classColumns,
+      ...inviteCodeColumn,
       subject: {
         ...getTableColumns(subjects),
       },
@@ -110,19 +129,29 @@ router.get("/:id", async (req, res) => {
     .leftJoin(subjects, eq(classes.subjectId, subjects.id))
     .leftJoin(user, eq(classes.teacherId, user.id))
     .leftJoin(departments, eq(subjects.departmentId, departments.id))
-    .where(eq(classes.id, classId));
+    .where(and(
+      eq(classes.id, classId),
+      req.user?.role === "teacher" ? eq(classes.teacherId, req.user.id) : undefined,
+      req.user?.role === "student" ? eq(classes.status, "active") : undefined,
+    ));
 
   if (!classDetails) return res.status(404).json({ error: "No Class found." });
 
   res.status(200).json({ data: classDetails });
 });
 
-router.post("/", async (req, res) => {
+router.post("/", requireRole("admin", "teacher"), async (req, res) => {
   try {
+    const teacherId = req.user?.role === "teacher" ? req.user.id : req.body.teacherId;
+    if (req.user?.role === "admin" && !teacherId) {
+      return res.status(400).json({ error: "teacherId is required" });
+    }
+
     const [createdClass] = await db
       .insert(classes)
       .values({
         ...req.body,
+        teacherId,
         inviteCode: Math.random().toString(36).substring(2, 9),
         schedules: [],
       })
