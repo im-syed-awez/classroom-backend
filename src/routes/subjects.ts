@@ -8,8 +8,8 @@ const router = express.Router();
 
 router.use(requireAuth);
 
-const parseId = (value: string) => {
-    const id = Number(value);
+const parseId = (value: unknown) => {
+    const id = typeof value === "string" ? Number(value) : NaN;
     return Number.isInteger(id) && id > 0 ? id : null;
 };
 
