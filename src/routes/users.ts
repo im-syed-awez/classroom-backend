@@ -27,7 +27,9 @@ router.get("/", async (req, res) => {
                 )
             );
         }
-        const requestedRole = req.user?.role === "admin" ? role : "teacher";
+        const requestedRole = req.user?.role === "admin"
+            ? role
+            : role === "student" ? "student" : "teacher";
         if (requestedRole) {
             filterConditions.push(eq(user.role, String(requestedRole) as "student" | "teacher" | "admin"));
         }
@@ -40,13 +42,13 @@ router.get("/", async (req, res) => {
             .where(whereClause);
         const totalCount = countResult[0]?.count ?? 0;
 
-        const usersList = await db
-            .select({ ...getTableColumns(user) })
-            .from(user)
-            .where(whereClause)
-            .orderBy(desc(user.createdAt))
-            .limit(LimitPerPage)
-            .offset(offset);
+        const usersList = requestedRole === "student"
+            ? await db.select({ id: user.id, name: user.name, image: user.image })
+                .from(user).where(whereClause).orderBy(desc(user.createdAt))
+                .limit(LimitPerPage).offset(offset)
+            : await db.select({ ...getTableColumns(user) })
+                .from(user).where(whereClause).orderBy(desc(user.createdAt))
+                .limit(LimitPerPage).offset(offset);
 
         res.status(200).json({
             data: usersList,

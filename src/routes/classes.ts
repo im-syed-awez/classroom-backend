@@ -214,6 +214,160 @@ router.get("/:id", async (req, res) => {
   res.status(200).json({ data: classDetails });
 });
 
+router.get("/:id/enrollments", requireRole("admin", "teacher"), async (req, res) => {
+  const classId = parseId(req.params.id);
+  if (!classId) return res.status(400).json({ error: "Invalid class ID" });
+
+  try {
+    const [classRecord] = await db.select({ id: classes.id }).from(classes).where(and(
+      eq(classes.id, classId),
+      req.user?.role === "teacher" ? eq(classes.teacherId, req.user.id) : undefined,
+    ));
+    if (!classRecord) return res.status(404).json({ error: "Class not found" });
+
+    const data = await db.select({
+      id: enrollments.id,
+      studentId: user.id,
+      name: user.name,
+      image: user.image,
+      enrolledAt: enrollments.createdAt,
+    }).from(enrollments)
+      .innerJoin(user, eq(enrollments.studentId, user.id))
+      .where(eq(enrollments.classId, classId))
+      .orderBy(user.name);
+
+    res.json({ data });
+  } catch (error) {
+    console.error("GET /classes/:id/enrollments error:", error);
+    res.status(500).json({ error: "Failed to get class enrollments" });
+  }
+});
+
+router.get("/:id/enrollment", async (req, res) => {
+  const classId = parseId(req.params.id);
+  if (!classId || !req.user) return res.status(400).json({ error: "Invalid class ID" });
+
+  try {
+    const [classRecord] = await db.select({ id: classes.id }).from(classes).where(and(
+      eq(classes.id, classId),
+      req.user.role === "teacher" ? eq(classes.teacherId, req.user.id) : undefined,
+      req.user.role === "student" ? eq(classes.status, "active") : undefined,
+    ));
+    if (!classRecord) return res.status(404).json({ error: "Class not found" });
+
+    const [data] = await db.select({ id: enrollments.id, enrolledAt: enrollments.createdAt })
+      .from(enrollments)
+      .where(and(eq(enrollments.classId, classId), eq(enrollments.studentId, req.user.id)));
+    res.json({ data: data ?? null });
+  } catch (error) {
+    console.error("GET /classes/:id/enrollment error:", error);
+    res.status(500).json({ error: "Failed to get enrollment status" });
+  }
+});
+
+router.post("/:id/enrollments", async (req, res) => {
+  const classId = parseId(req.params.id);
+  if (!classId || !req.user) return res.status(400).json({ error: "Invalid class ID" });
+  const isStudent = req.user.role === "student";
+  if (!isStudent && req.user.role !== "admin" && req.user.role !== "teacher") {
+    return res.status(403).json({ error: "Insufficient permissions" });
+  }
+
+  try {
+    const data = await db.transaction(async (tx) => {
+      const [classRecord] = await tx.select().from(classes)
+        .where(and(
+          eq(classes.id, classId),
+          req.user?.role === "teacher" ? eq(classes.teacherId, req.user.id) : undefined,
+        ))
+        .for("update");
+      if (!classRecord) throw Object.assign(new Error("Class not found"), { statusCode: 404 });
+      if (classRecord.status !== "active") throw Object.assign(new Error("This class is not open for enrollment."), { statusCode: 409 });
+
+      if (isStudent) {
+        const inviteCode = typeof req.body?.inviteCode === "string" ? req.body.inviteCode.trim().toUpperCase() : "";
+        if (!inviteCode || inviteCode !== classRecord.inviteCode) {
+          throw Object.assign(new Error("The invite code is invalid."), { statusCode: 403 });
+        }
+      }
+
+      const studentId = isStudent ? req.user!.id : req.body?.studentId;
+      if (typeof studentId !== "string" || !studentId) {
+        throw Object.assign(new Error("A student account is required."), { statusCode: 400 });
+      }
+      const [student] = await tx.select({ id: user.id }).from(user)
+        .where(and(eq(user.id, studentId), eq(user.role, "student")));
+      if (!student) throw Object.assign(new Error("The selected account is not a student."), { statusCode: 400 });
+
+      const [existing] = await tx.select({ id: enrollments.id }).from(enrollments)
+        .where(and(eq(enrollments.classId, classId), eq(enrollments.studentId, studentId)));
+      if (existing) throw Object.assign(new Error("This student is already enrolled."), { statusCode: 409 });
+
+      const [countResult] = await tx.select({ count: sql<number>`count(*)`.mapWith(Number) })
+        .from(enrollments).where(eq(enrollments.classId, classId));
+      const enrolledCount = countResult?.count ?? 0;
+      if (enrolledCount >= classRecord.capacity) {
+        throw Object.assign(new Error("This class has reached capacity."), { statusCode: 409 });
+      }
+
+      const [created] = await tx.insert(enrollments).values({ classId, studentId }).returning({
+        id: enrollments.id,
+        classId: enrollments.classId,
+        studentId: enrollments.studentId,
+        createdAt: enrollments.createdAt,
+      });
+      return created;
+    });
+
+    res.status(201).json({ data });
+  } catch (error) {
+    const statusCode = typeof error === "object" && error !== null && "statusCode" in error
+      ? Number((error as { statusCode: number }).statusCode)
+      : 500;
+    if (statusCode === 500) console.error("POST /classes/:id/enrollments error:", error);
+    res.status(statusCode).json({ error: error instanceof Error ? error.message : "Failed to enroll student" });
+  }
+});
+
+router.delete("/:id/enrollment", requireRole("student"), async (req, res) => {
+  const classId = parseId(req.params.id);
+  if (!classId || !req.user) return res.status(400).json({ error: "Invalid class ID" });
+  try {
+    const [deleted] = await db.delete(enrollments).where(and(
+      eq(enrollments.classId, classId),
+      eq(enrollments.studentId, req.user.id),
+    )).returning({ id: enrollments.id });
+    if (!deleted) return res.status(404).json({ error: "Enrollment not found" });
+    res.status(204).send();
+  } catch (error) {
+    console.error("DELETE /classes/:id/enrollment error:", error);
+    res.status(500).json({ error: "Failed to leave class" });
+  }
+});
+
+router.delete("/:id/enrollments/:studentId", requireRole("admin", "teacher"), async (req, res) => {
+  const classId = parseId(req.params.id);
+  const studentId = typeof req.params.studentId === "string" ? req.params.studentId : "";
+  if (!classId || !studentId) return res.status(400).json({ error: "Invalid class or student ID" });
+
+  try {
+    const [classRecord] = await db.select({ id: classes.id }).from(classes).where(and(
+      eq(classes.id, classId),
+      req.user?.role === "teacher" ? eq(classes.teacherId, req.user.id) : undefined,
+    ));
+    if (!classRecord) return res.status(404).json({ error: "Class not found" });
+    const [deleted] = await db.delete(enrollments).where(and(
+      eq(enrollments.classId, classId),
+      eq(enrollments.studentId, studentId),
+    )).returning({ id: enrollments.id });
+    if (!deleted) return res.status(404).json({ error: "Enrollment not found" });
+    res.status(204).send();
+  } catch (error) {
+    console.error("DELETE /classes/:id/enrollments/:studentId error:", error);
+    res.status(500).json({ error: "Failed to remove student enrollment" });
+  }
+});
+
 router.post("/", requireRole("admin", "teacher"), async (req, res) => {
   const parsed = parseClassInput(req.body ?? {});
   if (parsed.error) return res.status(400).json({ error: parsed.error });
