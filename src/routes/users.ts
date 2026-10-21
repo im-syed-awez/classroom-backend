@@ -2,8 +2,11 @@ import { and, desc, eq, getTableColumns, ilike, or, sql } from "drizzle-orm";
 import express from "express";
 import { db } from "../db/index.js";
 import { user } from "../db/schema/auth.js";
+import { requireRole } from "../middleware/auth.js";
 
 const router = express.Router();
+
+router.use(requireRole("admin", "teacher"));
 
 // Get all users with optional search, role filtering, and pagination
 router.get("/", async (req, res) => {
@@ -24,8 +27,9 @@ router.get("/", async (req, res) => {
                 )
             );
         }
-        if (role) {
-            filterConditions.push(eq(user.role, String(role) as "student" | "teacher" | "admin"));
+        const requestedRole = req.user?.role === "admin" ? role : "teacher";
+        if (requestedRole) {
+            filterConditions.push(eq(user.role, String(requestedRole) as "student" | "teacher" | "admin"));
         }
 
         const whereClause = filterConditions.length > 0 ? and(...filterConditions) : undefined;
