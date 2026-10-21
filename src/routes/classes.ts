@@ -143,6 +143,10 @@ router.get("/:id", async (req, res) => {
 router.post("/", requireRole("admin", "teacher"), async (req, res) => {
   try {
     const teacherId = req.user?.role === "teacher" ? req.user.id : req.body.teacherId;
+    if (req.user?.role === "admin" && !teacherId) {
+      return res.status(400).json({ error: "teacherId is required" });
+    }
+
     const [createdClass] = await db
       .insert(classes)
       .values({

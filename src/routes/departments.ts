@@ -69,7 +69,7 @@ router.post("/", requireRole("admin"), async (req, res) => {
     res.status(201).json({ data });
   } catch (error) {
     console.error("POST /departments error:", error);
-    res.status(409).json({ error: "Could not create department. Check that its code is unique." });
+    res.status(500).json({ error: "Could not create department. Check that its code is unique." });
   }
 });
 
@@ -85,7 +85,7 @@ router.patch("/:id", requireRole("admin"), async (req, res) => {
     res.json({ data });
   } catch (error) {
     console.error("PATCH /departments/:id error:", error);
-    res.status(409).json({ error: "Could not update department. Check that its code is unique." });
+    res.status(500).json({ error: "Could not update department. Check that its code is unique." });
   }
 });
 

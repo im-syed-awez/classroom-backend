@@ -63,12 +63,13 @@ router.get('/', async (req, res) => {
         }
         // If department filter exits, match department name
         if (department) {
-            const depPattern = `%${String(department).replace(/[%_]/g, '\\$&')}%`;
-            const departmentId = Number(department);
-            filterConditions.push(Number.isInteger(departmentId)
-                ? eq(departments.id, departmentId)
+            const departmentValue = String(department);
+            const depPattern = `%${departmentValue.replace(/[%_]/g, '\\$&')}%`;
+            const isDepartmentId = /^\d+$/.test(departmentValue);
+            const departmentId = Number(departmentValue);
+            filterConditions.push(isDepartmentId
+                ? or(eq(departments.id, departmentId), ilike(departments.name, depPattern))
                 : ilike(departments.name, depPattern));
-            
         }
         // Combine all filters using AND if any exits
         const whereClause = filterConditions.length > 0 ? and(...filterConditions) : undefined;
@@ -137,7 +138,7 @@ router.post("/", requireRole("admin"), async (req, res) => {
         res.status(201).json({ data });
     } catch (error) {
         console.error("POST /subjects error:", error);
-        res.status(409).json({ error: "Could not create subject. Check that its code and department are valid." });
+        res.status(500).json({ error: "Could not create subject. Check that its code and department are valid." });
     }
 });
 
@@ -153,7 +154,7 @@ router.patch("/:id", requireRole("admin"), async (req, res) => {
         res.json({ data });
     } catch (error) {
         console.error("PATCH /subjects/:id error:", error);
-        res.status(409).json({ error: "Could not update subject. Check that its code and department are valid." });
+        res.status(500).json({ error: "Could not update subject. Check that its code and department are valid." });
     }
 });
 
