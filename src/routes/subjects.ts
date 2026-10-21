@@ -138,7 +138,9 @@ router.post("/", requireRole("admin"), async (req, res) => {
         res.status(201).json({ data });
     } catch (error) {
         console.error("POST /subjects error:", error);
-        res.status(500).json({ error: "Could not create subject. Check that its code and department are valid." });
+        const code = (error as { code?: unknown })?.code;
+        const status = code === "23505" || code === "23503" ? 409 : 500;
+        res.status(status).json({ error: "Could not create subject. Check that its code and department are valid." });
     }
 });
 
