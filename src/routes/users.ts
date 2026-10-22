@@ -8,7 +8,24 @@ import { auth } from "../lib/auth.js";
 
 const router = express.Router();
 
-router.use(requireRole("admin", "teacher"));
+router.use(requireRole("admin"));
+
+const isDuplicateEmailError = (error: unknown) => {
+    if (!error || typeof error !== "object") return false;
+    const candidate = error as {
+        code?: unknown;
+        constraint?: unknown;
+        body?: { code?: unknown };
+        cause?: { code?: unknown; constraint?: unknown };
+    };
+    const codes = [candidate.code, candidate.body?.code, candidate.cause?.code];
+    if (codes.some((code) => code === "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL" || code === "USER_ALREADY_EXISTS")) {
+        return true;
+    }
+    return [candidate, candidate.cause].some((detail) =>
+        detail?.code === "23505" && typeof detail.constraint === "string" && detail.constraint.toLowerCase().includes("email")
+    );
+};
 
 // Get all users with optional search, role filtering, and pagination
 router.get("/", async (req, res) => {
@@ -95,7 +112,20 @@ router.post("/", requireRole("admin"), async (req, res) => {
     const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
     const password = typeof req.body?.password === "string" ? req.body.password : "";
     const role = req.body?.role;
-    const image = typeof req.body?.image === "string" ? req.body.image : null;
+    const rawImage = req.body?.image;
+    let image: string | null = null;
+    if (rawImage !== undefined && rawImage !== null && rawImage !== "") {
+        if (typeof rawImage !== "string") return res.status(400).json({ error: "Image must be a valid URL." });
+        try {
+            const imageUrl = new URL(rawImage);
+            if (imageUrl.protocol !== "http:" && imageUrl.protocol !== "https:") {
+                return res.status(400).json({ error: "Image must be a valid URL." });
+            }
+            image = rawImage;
+        } catch {
+            return res.status(400).json({ error: "Image must be a valid URL." });
+        }
+    }
     if (name.length < 2 || name.length > 255) return res.status(400).json({ error: "Name must be between 2 and 255 characters." });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "Enter a valid email address." });
     if (password.length < 8 || password.length > 128) return res.status(400).json({ error: "Temporary password must be between 8 and 128 characters." });
@@ -104,15 +134,30 @@ router.post("/", requireRole("admin"), async (req, res) => {
     try {
         const result = await auth.api.signUpEmail({ body: { name, email, password } });
         if (!result?.user?.id) return res.status(500).json({ error: "Account creation did not return a user." });
-        const [created] = await db.update(user).set({ role, image }).where(eq(user.id, result.user.id)).returning({
-            id: user.id, name: user.name, email: user.email, role: user.role,
-            image: user.image, emailVerified: user.emailVerified,
-            createdAt: user.createdAt, updatedAt: user.updatedAt,
-        });
+        let created;
+        try {
+            [created] = await db.update(user).set({ role, image }).where(eq(user.id, result.user.id)).returning({
+                id: user.id, name: user.name, email: user.email, role: user.role,
+                image: user.image, emailVerified: user.emailVerified,
+                createdAt: user.createdAt, updatedAt: user.updatedAt,
+            });
+            if (!created) throw new Error("Account role/image update returned no user.");
+        } catch (error) {
+            console.error("POST /users role/image update error:", error);
+            try {
+                await db.delete(user).where(eq(user.id, result.user.id));
+            } catch (cleanupError) {
+                console.error("POST /users account cleanup error:", cleanupError);
+            }
+            return res.status(500).json({ error: "Could not complete account creation." });
+        }
         return res.status(201).json({ data: created });
     } catch (error) {
         console.error("POST /users error:", error);
-        return res.status(409).json({ error: "Could not create the account. The email may already be registered." });
+        if (isDuplicateEmailError(error)) {
+            return res.status(409).json({ error: "Could not create the account. The email may already be registered." });
+        }
+        return res.status(500).json({ error: "Could not create the account." });
     }
 });
 
