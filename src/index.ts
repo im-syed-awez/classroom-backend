@@ -7,6 +7,7 @@ const { default: subjectsRouter } = await import("./routes/subjects.js");
 const { default: departmentsRouter } = await import("./routes/departments.js");
 const { default: usersRouter } = await import("./routes/users.js");
 const { default: classesRouter } = await import("./routes/classes.js");
+const { default: analyticsRouter } = await import("./routes/analytics.js");
 const { default: securityMiddleware } = await import("./middleware/security.js");
 const { resolveIdentity } = await import("./middleware/auth.js");
 const { toNodeHandler } = await import("better-auth/node");
@@ -38,6 +39,7 @@ app.use('/api/subjects', subjectsRouter)
 app.use('/api/departments', departmentsRouter)
 app.use('/api/users', usersRouter)
 app.use('/api/classes', classesRouter)
+app.use('/api/analytics', analyticsRouter)
 
 app.get("/", (req, res) => {
 	res.send("Classroom Management API is running");
