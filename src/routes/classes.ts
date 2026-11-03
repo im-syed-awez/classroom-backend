@@ -1,9 +1,25 @@
 import express from "express";
-import { and, desc, eq, getTableColumns, ilike, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  gte,
+  ilike,
+  lte,
+  or,
+  sql,
+} from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 
 import { db } from "../db/index.js";
-import { classes, departments, enrollments, subjects } from "../db/schema/app.js";
+import {
+  classes,
+  departments,
+  enrollments,
+  subjects,
+} from "../db/schema/app.js";
 import type { Schedule } from "../db/schema/app.js";
 import { user } from "../db/schema/auth.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
@@ -28,35 +44,68 @@ type ParsedClassInput = {
   schedules: Schedule[];
 };
 
-const parseClassInput = (body: Record<string, unknown>): { error: string; value?: never } | { value: ParsedClassInput; error?: never } => {
+const parseClassInput = (
+  body: Record<string, unknown>,
+):
+  | { error: string; value?: never }
+  | { value: ParsedClassInput; error?: never } => {
   const name = typeof body.name === "string" ? body.name.trim() : "";
-  const description = typeof body.description === "string" ? body.description.trim() : "";
+  const description =
+    typeof body.description === "string" ? body.description.trim() : "";
   const subjectId = Number(body.subjectId);
   const capacity = Number(body.capacity);
   const status = body.status;
-  const bannerUrl = typeof body.bannerUrl === "string" ? body.bannerUrl.trim() : null;
-  const bannerCldPubId = typeof body.bannerCldPubId === "string" ? body.bannerCldPubId.trim() : null;
+  const bannerUrl =
+    typeof body.bannerUrl === "string" ? body.bannerUrl.trim() : null;
+  const bannerCldPubId =
+    typeof body.bannerCldPubId === "string" ? body.bannerCldPubId.trim() : null;
   const schedules = Array.isArray(body.schedules) ? body.schedules : [];
 
-  if (!name || name.length > 255) return { error: "Class name is required and must be 255 characters or fewer." };
+  if (!name || name.length > 255)
+    return {
+      error: "Class name is required and must be 255 characters or fewer.",
+    };
   if (description.length > 10000) return { error: "Description is too long." };
-  if (!Number.isInteger(subjectId) || subjectId < 1) return { error: "A valid subject is required." };
-  if (!Number.isInteger(capacity) || capacity < 1) return { error: "Capacity must be a positive whole number." };
-  if (status !== "active" && status !== "inactive" && status !== "archived") return { error: "Invalid class status." };
+  if (!Number.isInteger(subjectId) || subjectId < 1)
+    return { error: "A valid subject is required." };
+  if (!Number.isInteger(capacity) || capacity < 1)
+    return { error: "Capacity must be a positive whole number." };
+  if (status !== "active" && status !== "inactive" && status !== "archived")
+    return { error: "Invalid class status." };
 
   const normalizedSchedules: Schedule[] = [];
   for (const entry of schedules) {
-    if (!entry || typeof entry !== "object") return { error: "Each schedule must include a day and start/end times." };
+    if (!entry || typeof entry !== "object")
+      return { error: "Each schedule must include a day and start/end times." };
     const schedule = entry as Record<string, unknown>;
     const day = schedule.day;
     const startTime = schedule.startTime;
     const endTime = schedule.endTime;
-    if (typeof day !== "string" || !["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].includes(day)) {
+    if (
+      typeof day !== "string" ||
+      ![
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+      ].includes(day)
+    ) {
       return { error: "Schedule day is invalid." };
     }
-    if (typeof startTime !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) ||
-        typeof endTime !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(endTime) || startTime >= endTime) {
-      return { error: "Schedule times must be valid and the end time must follow the start time." };
+    if (
+      typeof startTime !== "string" ||
+      !/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) ||
+      typeof endTime !== "string" ||
+      !/^([01]\d|2[0-3]):[0-5]\d$/.test(endTime) ||
+      startTime >= endTime
+    ) {
+      return {
+        error:
+          "Schedule times must be valid and the end time must follow the start time.",
+      };
     }
     normalizedSchedules.push({ day, startTime, endTime });
   }
@@ -78,7 +127,19 @@ const parseClassInput = (body: Record<string, unknown>): { error: string; value?
 // Get all classes with optional search, filtering and pagination
 router.get("/", async (req, res) => {
   try {
-    const { search, subject, teacher, page = 1, limit = 10 } = req.query;
+    const {
+      search,
+      subject,
+      teacher,
+      status,
+      capacityStatus,
+      createdFrom,
+      createdTo,
+      page = 1,
+      limit = 10,
+      sortBy,
+      sortOrder,
+    } = req.query;
 
     const currentPage = Math.max(1, parseInt(String(page), 10) || 1);
     const limitPerPage = Math.min(
@@ -112,6 +173,36 @@ router.get("/", async (req, res) => {
       filterConditions.push(ilike(user.name, teacherPattern));
     }
 
+    if (status === "active" || status === "inactive" || status === "archived") {
+      filterConditions.push(eq(classes.status, status));
+    }
+    if (
+      typeof createdFrom === "string" &&
+      !Number.isNaN(Date.parse(createdFrom))
+    ) {
+      filterConditions.push(
+        gte(classes.createdAt, new Date(`${createdFrom}T00:00:00.000Z`)),
+      );
+    }
+    if (typeof createdTo === "string" && !Number.isNaN(Date.parse(createdTo))) {
+      filterConditions.push(
+        lte(classes.createdAt, new Date(`${createdTo}T23:59:59.999Z`)),
+      );
+    }
+    if (capacityStatus === "full") {
+      filterConditions.push(
+        sql`(select count(*) from ${enrollments} where ${enrollments.classId} = ${classes.id}) >= ${classes.capacity}`,
+      );
+    } else if (capacityStatus === "nearlyFull") {
+      filterConditions.push(
+        sql`(select count(*) from ${enrollments} where ${enrollments.classId} = ${classes.id}) >= ${classes.capacity} * 0.9 and (select count(*) from ${enrollments} where ${enrollments.classId} = ${classes.id}) < ${classes.capacity}`,
+      );
+    } else if (capacityStatus === "available") {
+      filterConditions.push(
+        sql`(select count(*) from ${enrollments} where ${enrollments.classId} = ${classes.id}) < ${classes.capacity} * 0.9`,
+      );
+    }
+
     if (req.user?.role === "teacher") {
       filterConditions.push(eq(classes.teacherId, req.user.id));
     } else if (req.user?.role === "student") {
@@ -131,9 +222,24 @@ router.get("/", async (req, res) => {
 
     const totalCount = countResult[0]?.count ?? 0;
 
-    const { inviteCode: _inviteCode, ...classColumns } = getTableColumns(classes);
+    const { inviteCode: _inviteCode, ...classColumns } =
+      getTableColumns(classes);
     const inviteCodeColumn =
       req.user?.role === "student" ? {} : { inviteCode: classes.inviteCode };
+
+    const sortableColumns = {
+      id: classes.id,
+      name: classes.name,
+      createdAt: classes.createdAt,
+      capacity: classes.capacity,
+      status: classes.status,
+    };
+    const sortColumn =
+      typeof sortBy === "string" &&
+      Object.prototype.hasOwnProperty.call(sortableColumns, sortBy)
+        ? sortableColumns[sortBy as keyof typeof sortableColumns]
+        : classes.createdAt;
+    const orderBy = sortOrder === "asc" ? asc(sortColumn) : desc(sortColumn);
 
     const classesList = await db
       .select({
@@ -150,7 +256,7 @@ router.get("/", async (req, res) => {
       .leftJoin(subjects, eq(classes.subjectId, subjects.id))
       .leftJoin(user, eq(classes.teacherId, user.id))
       .where(whereClause)
-      .orderBy(desc(classes.createdAt))
+      .orderBy(orderBy, asc(classes.id))
       .limit(limitPerPage)
       .offset(offset);
 
@@ -173,8 +279,7 @@ router.get("/", async (req, res) => {
 router.get("/:id", async (req, res) => {
   const classId = parseId(req.params.id);
 
-  if (!classId)
-    return res.status(400).json({ error: "No Class found." });
+  if (!classId) return res.status(400).json({ error: "No Class found." });
 
   const { inviteCode: _inviteCode, ...classColumns } = getTableColumns(classes);
   const inviteCodeColumn =
@@ -193,7 +298,9 @@ router.get("/:id", async (req, res) => {
       teacher: {
         ...getTableColumns(user),
       },
-      ...(req.user?.role === "student" ? {} : { inviteCode: classes.inviteCode }),
+      ...(req.user?.role === "student"
+        ? {}
+        : { inviteCode: classes.inviteCode }),
       enrollmentCount: sql<number>`(
         select count(*)::int from ${enrollments}
         where ${enrollments.classId} = ${classes.id}
@@ -203,61 +310,95 @@ router.get("/:id", async (req, res) => {
     .leftJoin(subjects, eq(classes.subjectId, subjects.id))
     .leftJoin(user, eq(classes.teacherId, user.id))
     .leftJoin(departments, eq(subjects.departmentId, departments.id))
-    .where(and(
-      eq(classes.id, classId),
-      req.user?.role === "teacher" ? eq(classes.teacherId, req.user.id) : undefined,
-      req.user?.role === "student" ? eq(classes.status, "active") : undefined,
-    ));
+    .where(
+      and(
+        eq(classes.id, classId),
+        req.user?.role === "teacher"
+          ? eq(classes.teacherId, req.user.id)
+          : undefined,
+        req.user?.role === "student" ? eq(classes.status, "active") : undefined,
+      ),
+    );
 
   if (!classDetails) return res.status(404).json({ error: "No Class found." });
 
   res.status(200).json({ data: classDetails });
 });
 
-router.get("/:id/enrollments", requireRole("admin", "teacher"), async (req, res) => {
-  const classId = parseId(req.params.id);
-  if (!classId) return res.status(400).json({ error: "Invalid class ID" });
+router.get(
+  "/:id/enrollments",
+  requireRole("admin", "teacher"),
+  async (req, res) => {
+    const classId = parseId(req.params.id);
+    if (!classId) return res.status(400).json({ error: "Invalid class ID" });
 
-  try {
-    const [classRecord] = await db.select({ id: classes.id }).from(classes).where(and(
-      eq(classes.id, classId),
-      req.user?.role === "teacher" ? eq(classes.teacherId, req.user.id) : undefined,
-    ));
-    if (!classRecord) return res.status(404).json({ error: "Class not found" });
+    try {
+      const [classRecord] = await db
+        .select({ id: classes.id })
+        .from(classes)
+        .where(
+          and(
+            eq(classes.id, classId),
+            req.user?.role === "teacher"
+              ? eq(classes.teacherId, req.user.id)
+              : undefined,
+          ),
+        );
+      if (!classRecord)
+        return res.status(404).json({ error: "Class not found" });
 
-    const data = await db.select({
-      id: enrollments.id,
-      studentId: user.id,
-      name: user.name,
-      image: user.image,
-      enrolledAt: enrollments.createdAt,
-    }).from(enrollments)
-      .innerJoin(user, eq(enrollments.studentId, user.id))
-      .where(eq(enrollments.classId, classId))
-      .orderBy(user.name);
+      const data = await db
+        .select({
+          id: enrollments.id,
+          studentId: user.id,
+          name: user.name,
+          image: user.image,
+          enrolledAt: enrollments.createdAt,
+        })
+        .from(enrollments)
+        .innerJoin(user, eq(enrollments.studentId, user.id))
+        .where(eq(enrollments.classId, classId))
+        .orderBy(user.name);
 
-    res.json({ data });
-  } catch (error) {
-    console.error("GET /classes/:id/enrollments error:", error);
-    res.status(500).json({ error: "Failed to get class enrollments" });
-  }
-});
+      res.json({ data });
+    } catch (error) {
+      console.error("GET /classes/:id/enrollments error:", error);
+      res.status(500).json({ error: "Failed to get class enrollments" });
+    }
+  },
+);
 
 router.get("/:id/enrollment", async (req, res) => {
   const classId = parseId(req.params.id);
-  if (!classId || !req.user) return res.status(400).json({ error: "Invalid class ID" });
+  if (!classId || !req.user)
+    return res.status(400).json({ error: "Invalid class ID" });
 
   try {
-    const [classRecord] = await db.select({ id: classes.id }).from(classes).where(and(
-      eq(classes.id, classId),
-      req.user.role === "teacher" ? eq(classes.teacherId, req.user.id) : undefined,
-      req.user.role === "student" ? eq(classes.status, "active") : undefined,
-    ));
+    const [classRecord] = await db
+      .select({ id: classes.id })
+      .from(classes)
+      .where(
+        and(
+          eq(classes.id, classId),
+          req.user.role === "teacher"
+            ? eq(classes.teacherId, req.user.id)
+            : undefined,
+          req.user.role === "student"
+            ? eq(classes.status, "active")
+            : undefined,
+        ),
+      );
     if (!classRecord) return res.status(404).json({ error: "Class not found" });
 
-    const [data] = await db.select({ id: enrollments.id, enrolledAt: enrollments.createdAt })
+    const [data] = await db
+      .select({ id: enrollments.id, enrolledAt: enrollments.createdAt })
       .from(enrollments)
-      .where(and(eq(enrollments.classId, classId), eq(enrollments.studentId, req.user.id)));
+      .where(
+        and(
+          eq(enrollments.classId, classId),
+          eq(enrollments.studentId, req.user.id),
+        ),
+      );
     res.json({ data: data ?? null });
   } catch (error) {
     console.error("GET /classes/:id/enrollment error:", error);
@@ -267,7 +408,8 @@ router.get("/:id/enrollment", async (req, res) => {
 
 router.post("/:id/enrollments", async (req, res) => {
   const classId = parseId(req.params.id);
-  if (!classId || !req.user) return res.status(400).json({ error: "Invalid class ID" });
+  if (!classId || !req.user)
+    return res.status(400).json({ error: "Invalid class ID" });
   const isStudent = req.user.role === "student";
   if (!isStudent && req.user.role !== "admin" && req.user.role !== "teacher") {
     return res.status(403).json({ error: "Insufficient permissions" });
@@ -275,69 +417,124 @@ router.post("/:id/enrollments", async (req, res) => {
 
   try {
     const data = await db.transaction(async (tx) => {
-      const [classRecord] = await tx.select().from(classes)
-        .where(and(
-          eq(classes.id, classId),
-          req.user?.role === "teacher" ? eq(classes.teacherId, req.user.id) : undefined,
-        ))
+      const [classRecord] = await tx
+        .select()
+        .from(classes)
+        .where(
+          and(
+            eq(classes.id, classId),
+            req.user?.role === "teacher"
+              ? eq(classes.teacherId, req.user.id)
+              : undefined,
+          ),
+        )
         .for("update");
-      if (!classRecord) throw Object.assign(new Error("Class not found"), { statusCode: 404 });
-      if (classRecord.status !== "active") throw Object.assign(new Error("This class is not open for enrollment."), { statusCode: 409 });
+      if (!classRecord)
+        throw Object.assign(new Error("Class not found"), { statusCode: 404 });
+      if (classRecord.status !== "active")
+        throw Object.assign(
+          new Error("This class is not open for enrollment."),
+          { statusCode: 409 },
+        );
 
       if (isStudent) {
-        const inviteCode = typeof req.body?.inviteCode === "string" ? req.body.inviteCode.trim().toUpperCase() : "";
+        const inviteCode =
+          typeof req.body?.inviteCode === "string"
+            ? req.body.inviteCode.trim().toUpperCase()
+            : "";
         if (!inviteCode || inviteCode !== classRecord.inviteCode) {
-          throw Object.assign(new Error("The invite code is invalid."), { statusCode: 403 });
+          throw Object.assign(new Error("The invite code is invalid."), {
+            statusCode: 403,
+          });
         }
       }
 
       const studentId = isStudent ? req.user!.id : req.body?.studentId;
       if (typeof studentId !== "string" || !studentId) {
-        throw Object.assign(new Error("A student account is required."), { statusCode: 400 });
+        throw Object.assign(new Error("A student account is required."), {
+          statusCode: 400,
+        });
       }
-      const [student] = await tx.select({ id: user.id }).from(user)
+      const [student] = await tx
+        .select({ id: user.id })
+        .from(user)
         .where(and(eq(user.id, studentId), eq(user.role, "student")));
-      if (!student) throw Object.assign(new Error("The selected account is not a student."), { statusCode: 400 });
+      if (!student)
+        throw Object.assign(
+          new Error("The selected account is not a student."),
+          { statusCode: 400 },
+        );
 
-      const [existing] = await tx.select({ id: enrollments.id }).from(enrollments)
-        .where(and(eq(enrollments.classId, classId), eq(enrollments.studentId, studentId)));
-      if (existing) throw Object.assign(new Error("This student is already enrolled."), { statusCode: 409 });
+      const [existing] = await tx
+        .select({ id: enrollments.id })
+        .from(enrollments)
+        .where(
+          and(
+            eq(enrollments.classId, classId),
+            eq(enrollments.studentId, studentId),
+          ),
+        );
+      if (existing)
+        throw Object.assign(new Error("This student is already enrolled."), {
+          statusCode: 409,
+        });
 
-      const [countResult] = await tx.select({ count: sql<number>`count(*)`.mapWith(Number) })
-        .from(enrollments).where(eq(enrollments.classId, classId));
+      const [countResult] = await tx
+        .select({ count: sql<number>`count(*)`.mapWith(Number) })
+        .from(enrollments)
+        .where(eq(enrollments.classId, classId));
       const enrolledCount = countResult?.count ?? 0;
       if (enrolledCount >= classRecord.capacity) {
-        throw Object.assign(new Error("This class has reached capacity."), { statusCode: 409 });
+        throw Object.assign(new Error("This class has reached capacity."), {
+          statusCode: 409,
+        });
       }
 
-      const [created] = await tx.insert(enrollments).values({ classId, studentId }).returning({
-        id: enrollments.id,
-        classId: enrollments.classId,
-        studentId: enrollments.studentId,
-        createdAt: enrollments.createdAt,
-      });
+      const [created] = await tx
+        .insert(enrollments)
+        .values({ classId, studentId })
+        .returning({
+          id: enrollments.id,
+          classId: enrollments.classId,
+          studentId: enrollments.studentId,
+          createdAt: enrollments.createdAt,
+        });
       return created;
     });
 
     res.status(201).json({ data });
   } catch (error) {
-    const statusCode = typeof error === "object" && error !== null && "statusCode" in error
-      ? Number((error as { statusCode: number }).statusCode)
-      : 500;
-    if (statusCode === 500) console.error("POST /classes/:id/enrollments error:", error);
-    res.status(statusCode).json({ error: error instanceof Error ? error.message : "Failed to enroll student" });
+    const statusCode =
+      typeof error === "object" && error !== null && "statusCode" in error
+        ? Number((error as { statusCode: number }).statusCode)
+        : 500;
+    if (statusCode === 500)
+      console.error("POST /classes/:id/enrollments error:", error);
+    res
+      .status(statusCode)
+      .json({
+        error:
+          error instanceof Error ? error.message : "Failed to enroll student",
+      });
   }
 });
 
 router.delete("/:id/enrollment", requireRole("student"), async (req, res) => {
   const classId = parseId(req.params.id);
-  if (!classId || !req.user) return res.status(400).json({ error: "Invalid class ID" });
+  if (!classId || !req.user)
+    return res.status(400).json({ error: "Invalid class ID" });
   try {
-    const [deleted] = await db.delete(enrollments).where(and(
-      eq(enrollments.classId, classId),
-      eq(enrollments.studentId, req.user.id),
-    )).returning({ id: enrollments.id });
-    if (!deleted) return res.status(404).json({ error: "Enrollment not found" });
+    const [deleted] = await db
+      .delete(enrollments)
+      .where(
+        and(
+          eq(enrollments.classId, classId),
+          eq(enrollments.studentId, req.user.id),
+        ),
+      )
+      .returning({ id: enrollments.id });
+    if (!deleted)
+      return res.status(404).json({ error: "Enrollment not found" });
     res.status(204).send();
   } catch (error) {
     console.error("DELETE /classes/:id/enrollment error:", error);
@@ -345,46 +542,75 @@ router.delete("/:id/enrollment", requireRole("student"), async (req, res) => {
   }
 });
 
-router.delete("/:id/enrollments/:studentId", requireRole("admin", "teacher"), async (req, res) => {
-  const classId = parseId(req.params.id);
-  const studentId = typeof req.params.studentId === "string" ? req.params.studentId : "";
-  if (!classId || !studentId) return res.status(400).json({ error: "Invalid class or student ID" });
+router.delete(
+  "/:id/enrollments/:studentId",
+  requireRole("admin", "teacher"),
+  async (req, res) => {
+    const classId = parseId(req.params.id);
+    const studentId =
+      typeof req.params.studentId === "string" ? req.params.studentId : "";
+    if (!classId || !studentId)
+      return res.status(400).json({ error: "Invalid class or student ID" });
 
-  try {
-    const [classRecord] = await db.select({ id: classes.id }).from(classes).where(and(
-      eq(classes.id, classId),
-      req.user?.role === "teacher" ? eq(classes.teacherId, req.user.id) : undefined,
-    ));
-    if (!classRecord) return res.status(404).json({ error: "Class not found" });
-    const [deleted] = await db.delete(enrollments).where(and(
-      eq(enrollments.classId, classId),
-      eq(enrollments.studentId, studentId),
-    )).returning({ id: enrollments.id });
-    if (!deleted) return res.status(404).json({ error: "Enrollment not found" });
-    res.status(204).send();
-  } catch (error) {
-    console.error("DELETE /classes/:id/enrollments/:studentId error:", error);
-    res.status(500).json({ error: "Failed to remove student enrollment" });
-  }
-});
+    try {
+      const [classRecord] = await db
+        .select({ id: classes.id })
+        .from(classes)
+        .where(
+          and(
+            eq(classes.id, classId),
+            req.user?.role === "teacher"
+              ? eq(classes.teacherId, req.user.id)
+              : undefined,
+          ),
+        );
+      if (!classRecord)
+        return res.status(404).json({ error: "Class not found" });
+      const [deleted] = await db
+        .delete(enrollments)
+        .where(
+          and(
+            eq(enrollments.classId, classId),
+            eq(enrollments.studentId, studentId),
+          ),
+        )
+        .returning({ id: enrollments.id });
+      if (!deleted)
+        return res.status(404).json({ error: "Enrollment not found" });
+      res.status(204).send();
+    } catch (error) {
+      console.error("DELETE /classes/:id/enrollments/:studentId error:", error);
+      res.status(500).json({ error: "Failed to remove student enrollment" });
+    }
+  },
+);
 
 router.post("/", requireRole("admin", "teacher"), async (req, res) => {
   const parsed = parseClassInput(req.body ?? {});
   if (parsed.error) return res.status(400).json({ error: parsed.error });
 
   try {
-    const teacherId = req.user?.role === "teacher" ? req.user.id : req.body.teacherId;
+    const teacherId =
+      req.user?.role === "teacher" ? req.user.id : req.body.teacherId;
     if (req.user?.role === "admin" && !teacherId) {
       return res.status(400).json({ error: "teacherId is required" });
     }
-    const [teacher] = await db.select({ id: user.id }).from(user)
+    const [teacher] = await db
+      .select({ id: user.id })
+      .from(user)
       .where(and(eq(user.id, teacherId), eq(user.role, "teacher")));
-    if (!teacher) return res.status(400).json({ error: "The selected teacher does not exist." });
+    if (!teacher)
+      return res
+        .status(400)
+        .json({ error: "The selected teacher does not exist." });
 
     let inviteCode = randomBytes(6).toString("hex").toUpperCase();
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const [collision] = await db.select({ id: classes.id }).from(classes)
-        .where(eq(classes.inviteCode, inviteCode)).limit(1);
+      const [collision] = await db
+        .select({ id: classes.id })
+        .from(classes)
+        .where(eq(classes.inviteCode, inviteCode))
+        .limit(1);
       if (!collision) break;
       inviteCode = randomBytes(6).toString("hex").toUpperCase();
     }
@@ -404,7 +630,12 @@ router.post("/", requireRole("admin", "teacher"), async (req, res) => {
   } catch (e) {
     console.error(`POST /classes error ${e}`);
     console.error("POST /classes error:", e);
-    res.status(409).json({ error: "Could not create class. Check the selected subject and invite-code uniqueness." });
+    res
+      .status(409)
+      .json({
+        error:
+          "Could not create class. Check the selected subject and invite-code uniqueness.",
+      });
   }
 });
 
@@ -413,40 +644,75 @@ router.patch("/:id", requireRole("admin", "teacher"), async (req, res) => {
   if (!classId) return res.status(400).json({ error: "Invalid class ID" });
 
   try {
-    const [existing] = await db.select().from(classes).where(and(
-      eq(classes.id, classId),
-      req.user?.role === "teacher" ? eq(classes.teacherId, req.user.id) : undefined,
-    ));
+    const [existing] = await db
+      .select()
+      .from(classes)
+      .where(
+        and(
+          eq(classes.id, classId),
+          req.user?.role === "teacher"
+            ? eq(classes.teacherId, req.user.id)
+            : undefined,
+        ),
+      );
     if (!existing) return res.status(404).json({ error: "Class not found" });
 
     const parsed = parseClassInput({ ...existing, ...(req.body ?? {}) });
     if (parsed.error) return res.status(400).json({ error: parsed.error });
 
-    const [subject] = await db.select({ id: subjects.id }).from(subjects)
+    const [subject] = await db
+      .select({ id: subjects.id })
+      .from(subjects)
       .where(eq(subjects.id, parsed.value!.subjectId));
-    if (!subject) return res.status(400).json({ error: "The selected subject does not exist." });
+    if (!subject)
+      return res
+        .status(400)
+        .json({ error: "The selected subject does not exist." });
 
-    const teacherId = req.user?.role === "teacher" ? req.user.id : req.body.teacherId ?? existing.teacherId;
-    const [teacher] = await db.select({ id: user.id }).from(user)
+    const teacherId =
+      req.user?.role === "teacher"
+        ? req.user.id
+        : (req.body.teacherId ?? existing.teacherId);
+    const [teacher] = await db
+      .select({ id: user.id })
+      .from(user)
       .where(and(eq(user.id, teacherId), eq(user.role, "teacher")));
-    if (!teacher) return res.status(400).json({ error: "The selected teacher does not exist." });
+    if (!teacher)
+      return res
+        .status(400)
+        .json({ error: "The selected teacher does not exist." });
 
-    const [countResult] = await db.select({ count: sql<number>`count(*)`.mapWith(Number) })
-      .from(enrollments).where(eq(enrollments.classId, classId));
+    const [countResult] = await db
+      .select({ count: sql<number>`count(*)`.mapWith(Number) })
+      .from(enrollments)
+      .where(eq(enrollments.classId, classId));
     const enrollmentCount = countResult?.count ?? 0;
     if (parsed.value!.capacity < enrollmentCount) {
-      return res.status(409).json({ error: `Capacity cannot be lower than the ${enrollmentCount} students already enrolled.` });
+      return res
+        .status(409)
+        .json({
+          error: `Capacity cannot be lower than the ${enrollmentCount} students already enrolled.`,
+        });
     }
 
-    const [updated] = await db.update(classes).set({
-      ...parsed.value!,
-      teacherId,
-    }).where(eq(classes.id, classId)).returning({ id: classes.id });
+    const [updated] = await db
+      .update(classes)
+      .set({
+        ...parsed.value!,
+        teacherId,
+      })
+      .where(eq(classes.id, classId))
+      .returning({ id: classes.id });
 
     res.json({ data: updated });
   } catch (error) {
     console.error("PATCH /classes/:id error:", error);
-    res.status(409).json({ error: "Could not update class. Check its subject, teacher, and capacity." });
+    res
+      .status(409)
+      .json({
+        error:
+          "Could not update class. Check its subject, teacher, and capacity.",
+      });
   }
 });
 
@@ -455,10 +721,17 @@ router.delete("/:id", requireRole("admin", "teacher"), async (req, res) => {
   if (!classId) return res.status(400).json({ error: "Invalid class ID" });
 
   try {
-    const [existing] = await db.select({ id: classes.id }).from(classes).where(and(
-      eq(classes.id, classId),
-      req.user?.role === "teacher" ? eq(classes.teacherId, req.user.id) : undefined,
-    ));
+    const [existing] = await db
+      .select({ id: classes.id })
+      .from(classes)
+      .where(
+        and(
+          eq(classes.id, classId),
+          req.user?.role === "teacher"
+            ? eq(classes.teacherId, req.user.id)
+            : undefined,
+        ),
+      );
     if (!existing) return res.status(404).json({ error: "Class not found" });
 
     await db.delete(classes).where(eq(classes.id, classId));

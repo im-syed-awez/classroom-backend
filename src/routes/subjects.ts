@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, getTableColumns, ilike, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gte, ilike, lte, or, sql } from "drizzle-orm";
 import  express  from "express";
 import { classes, departments, subjects } from "../db/schema/app.js";
 import { db } from "../db/index.js";
@@ -28,7 +28,7 @@ const validateSubject = (body: Record<string, unknown>) => {
 //Get all subjects with optional search, filtering and pagination
 router.get('/', async (req, res) => {
     try {
-        const { search, department, page = 1, limit = 10, sortBy, sortOrder } =req.query;
+        const { search, department, createdFrom, createdTo, page = 1, limit = 10, sortBy, sortOrder } =req.query;
 
         const currentPage = Math.max(1, parseInt(String(page), 10) || 1);
         const LimitPerPage = Math.min(Math.max(1, parseInt(String(limit), 10) || 10), 100); // Max 100 records per page
@@ -70,6 +70,12 @@ router.get('/', async (req, res) => {
             filterConditions.push(isDepartmentId
                 ? or(eq(departments.id, departmentId), ilike(departments.name, depPattern))
                 : ilike(departments.name, depPattern));
+        }
+        if (typeof createdFrom === "string" && !Number.isNaN(Date.parse(createdFrom))) {
+            filterConditions.push(gte(subjects.createdAt, new Date(`${createdFrom}T00:00:00.000Z`)));
+        }
+        if (typeof createdTo === "string" && !Number.isNaN(Date.parse(createdTo))) {
+            filterConditions.push(lte(subjects.createdAt, new Date(`${createdTo}T23:59:59.999Z`)));
         }
         // Combine all filters using AND if any exits
         const whereClause = filterConditions.length > 0 ? and(...filterConditions) : undefined;
