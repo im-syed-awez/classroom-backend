@@ -368,6 +368,66 @@ router.get(
   },
 );
 
+router.get(
+  "/:id/enrollment-options",
+  requireRole("admin", "teacher"),
+  async (req, res) => {
+    const classId = parseId(req.params.id);
+    if (!classId) return res.status(400).json({ error: "Invalid class ID" });
+
+    try {
+      const [classRecord] = await db
+        .select({ id: classes.id })
+        .from(classes)
+        .where(
+          and(
+            eq(classes.id, classId),
+            req.user?.role === "teacher"
+              ? eq(classes.teacherId, req.user.id)
+              : undefined,
+          ),
+        );
+      if (!classRecord) return res.status(404).json({ error: "Class not found" });
+
+      const currentPage = Math.max(
+        1,
+        Number.parseInt(String(req.query.page ?? 1), 10) || 1,
+      );
+      const limitPerPage = Math.min(
+        100,
+        Math.max(1, Number.parseInt(String(req.query.limit ?? 100), 10) || 100),
+      );
+      const studentFilter = eq(user.role, "student");
+      const [countResult] = await db
+        .select({ count: sql<number>`count(*)`.mapWith(Number) })
+        .from(user)
+        .where(studentFilter);
+
+      const data = await db
+        .select({ id: user.id, name: user.name, image: user.image })
+        .from(user)
+        .where(studentFilter)
+        .orderBy(user.name)
+        .limit(limitPerPage)
+        .offset((currentPage - 1) * limitPerPage);
+
+      const total = countResult?.count ?? 0;
+      res.json({
+        data,
+        pagination: {
+          page: currentPage,
+          limit: limitPerPage,
+          total,
+          totalPages: Math.ceil(total / limitPerPage),
+        },
+      });
+    } catch (error) {
+      console.error("GET /classes/:id/enrollment-options error:", error);
+      res.status(500).json({ error: "Failed to get student options" });
+    }
+  },
+);
+
 router.get("/:id/enrollment", async (req, res) => {
   const classId = parseId(req.params.id);
   if (!classId || !req.user)
