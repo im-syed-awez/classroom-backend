@@ -389,14 +389,38 @@ router.get(
         );
       if (!classRecord) return res.status(404).json({ error: "Class not found" });
 
+      const currentPage = Math.max(
+        1,
+        Number.parseInt(String(req.query.page ?? 1), 10) || 1,
+      );
+      const limitPerPage = Math.min(
+        100,
+        Math.max(1, Number.parseInt(String(req.query.limit ?? 100), 10) || 100),
+      );
+      const studentFilter = eq(user.role, "student");
+      const [countResult] = await db
+        .select({ count: sql<number>`count(*)`.mapWith(Number) })
+        .from(user)
+        .where(studentFilter);
+
       const data = await db
         .select({ id: user.id, name: user.name, image: user.image })
         .from(user)
-        .where(eq(user.role, "student"))
+        .where(studentFilter)
         .orderBy(user.name)
-        .limit(100);
+        .limit(limitPerPage)
+        .offset((currentPage - 1) * limitPerPage);
 
-      res.json({ data });
+      const total = countResult?.count ?? 0;
+      res.json({
+        data,
+        pagination: {
+          page: currentPage,
+          limit: limitPerPage,
+          total,
+          totalPages: Math.ceil(total / limitPerPage),
+        },
+      });
     } catch (error) {
       console.error("GET /classes/:id/enrollment-options error:", error);
       res.status(500).json({ error: "Failed to get student options" });
